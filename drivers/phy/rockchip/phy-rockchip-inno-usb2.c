@@ -2577,6 +2577,10 @@ next_child:
 			break;
 	}
 
+	/* The loop may have stopped early after the last supported port. */
+	of_node_put(child_np);
+	child_np = NULL;
+
 	provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 	if (IS_ERR(provider)) {
 		dev_err(dev, "Failed to register phy provider\n");

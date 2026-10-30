@@ -20,9 +20,11 @@
 #define RR_MIN_IO     1
 #define RR_VERSION    "1.2.0"
 
-/*-----------------------------------------------------------------
+/*
+ *---------------------------------------------------------------
  * Path-handling code, paths are held in lists
- *---------------------------------------------------------------*/
+ *---------------------------------------------------------------
+ */
 struct path_info {
 	struct list_head list;
 	struct dm_path *path;
@@ -39,10 +41,11 @@ static void free_paths(struct list_head *paths)
 	}
 }
 
-/*-----------------------------------------------------------------
+/*
+ *---------------------------------------------------------------
  * Round-robin selector
- *---------------------------------------------------------------*/
-
+ *---------------------------------------------------------------
+ */
 struct selector {
 	struct list_head valid_paths;
 	struct list_head invalid_paths;
@@ -216,8 +219,10 @@ static int __init dm_rr_init(void)
 {
 	int r = dm_register_path_selector(&rr_ps);
 
-	if (r < 0)
+	if (r < 0) {
 		DMERR("register failed %d", r);
+		return r;
+	}
 
 	DMINFO("version " RR_VERSION " loaded");
 

@@ -398,7 +398,9 @@ static int rockchip_combphy_parse_dt(struct device *dev,
 		return ret;
 	}
 
-	priv->phy_rst = devm_reset_control_get_optional(dev, "combphy");
+	priv->phy_rst = devm_reset_control_get_exclusive(dev, "phy");
+	if (IS_ERR(priv->phy_rst) && PTR_ERR(priv->phy_rst) == -ENOENT)
+		priv->phy_rst = devm_reset_control_get_optional(dev, "combphy");
 	if (IS_ERR(priv->phy_rst)) {
 		ret = PTR_ERR(priv->phy_rst);
 

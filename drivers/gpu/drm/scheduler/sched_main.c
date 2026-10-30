@@ -965,13 +965,10 @@ int drm_sched_job_add_resv_dependencies(struct drm_sched_job *job,
 	dma_resv_assert_held(resv);
 
 	dma_resv_for_each_fence(&cursor, resv, usage, fence) {
-		/* Make sure to grab an additional ref on the added fence */
-		dma_fence_get(fence);
-		ret = drm_sched_job_add_dependency(job, fence);
-		if (ret) {
-			dma_fence_put(fence);
+		/* drm_sched_job_add_dependency consumes the reference on failure too. */
+		ret = drm_sched_job_add_dependency(job, dma_fence_get(fence));
+		if (ret)
 			return ret;
-		}
 	}
 	return 0;
 }
@@ -1305,7 +1302,8 @@ static struct workqueue_struct *drm_sched_alloc_wq(const char *name)
  *
  * Return 0 on success, otherwise error code.
  */
-int drm_sched_init(struct drm_gpu_scheduler *sched, const struct drm_sched_init_args *args)
+int drm_sched_init(struct drm_gpu_scheduler *sched,
+		   const struct drm_sched_init_args *args)
 {
 	int i;
 

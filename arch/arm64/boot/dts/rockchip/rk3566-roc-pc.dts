@@ -449,7 +449,7 @@
 		compatible = "rockchip,rk809";
 		reg = <0x20>;
 		interrupt-parent = <&gpio0>;
-		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <RK_PA3 IRQ_TYPE_LEVEL_LOW>;
 
 		pinctrl-names = "default", "pmic-sleep",
 				"pmic-power-off", "pmic-reset";

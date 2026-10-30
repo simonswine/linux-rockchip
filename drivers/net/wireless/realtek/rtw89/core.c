@@ -1265,14 +1265,18 @@ static int rtw89_core_rx_parse_phy_sts(struct rtw89_dev *rtwdev,
 	pos = (u8 *)phy_ppdu->buf + PHY_STS_HDR_LEN;
 	end = (u8 *)phy_ppdu->buf + phy_ppdu->len;
 	while (pos < end) {
-		ie_len = rtw89_core_get_phy_status_ie_len(rtwdev, pos);
-		rtw89_core_process_phy_status_ie(rtwdev, pos, phy_ppdu);
+		u8 *iehdr = pos;
+
+		ie_len = rtw89_core_get_phy_status_ie_len(rtwdev, iehdr);
 		pos += ie_len;
 		if (pos > end || ie_len == 0) {
 			rtw89_debug(rtwdev, RTW89_DBG_TXRX,
 				    "phy status parse failed\n");
+
 			return -EINVAL;
 		}
+
+		rtw89_core_process_phy_status_ie(rtwdev, iehdr, phy_ppdu);
 	}
 
 	return 0;
@@ -1752,6 +1756,9 @@ static void rtw89_core_update_rx_status(struct rtw89_dev *rtwdev,
 static enum rtw89_ps_mode rtw89_update_ps_mode(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
+
+	if (rtwdev->hci.type != RTW89_HCI_TYPE_PCIE)
+		return RTW89_PS_MODE_NONE;
 
 	if (rtw89_disable_ps_mode || !chip->ps_mode_supported ||
 	    RTW89_CHK_FW_FEATURE(NO_DEEP_PS, &rtwdev->fw))

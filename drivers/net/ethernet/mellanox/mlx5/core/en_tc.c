@@ -1873,9 +1873,8 @@ err_out:
 	return err;
 }
 
-static bool mlx5_flow_has_geneve_opt(struct mlx5e_tc_flow *flow)
+static bool mlx5_flow_has_geneve_opt(struct mlx5_flow_spec *spec)
 {
-	struct mlx5_flow_spec *spec = &flow->attr->parse_attr->spec;
 	void *headers_v = MLX5_ADDR_OF(fte_match_param,
 				       spec->match_value,
 				       misc_parameters_3);
@@ -1907,7 +1906,7 @@ static void mlx5e_tc_del_fdb_flow(struct mlx5e_priv *priv,
 	}
 	complete_all(&flow->del_hw_done);
 
-	if (mlx5_flow_has_geneve_opt(flow))
+	if (mlx5_flow_has_geneve_opt(&attr->parse_attr->spec))
 		mlx5_geneve_tlv_option_del(priv->mdev->geneve);
 
 	mlx5_eswitch_del_vlan_action(esw, attr);
@@ -2006,7 +2005,8 @@ static void mlx5e_tc_del_flow(struct mlx5e_priv *priv,
 			      struct mlx5e_tc_flow *flow)
 {
 	if (mlx5e_is_eswitch_flow(flow)) {
-		mlx5e_tc_del_fdb_peer_flow(flow);
+		if (!flow_flag_test(flow, PEER))
+			mlx5e_tc_del_fdb_peer_flow(flow);
 		mlx5e_tc_del_fdb_flow(priv, flow);
 	} else {
 		mlx5e_tc_del_nic_flow(priv, flow);
@@ -2415,12 +2415,13 @@ static int parse_tunnel_attr(struct mlx5e_priv *priv,
 
 		err = mlx5e_tc_tun_parse(filter_dev, priv, tmp_spec, f, match_level);
 		if (err) {
-			kvfree(tmp_spec);
 			NL_SET_ERR_MSG_MOD(extack, "Failed to parse tunnel attributes");
 			netdev_warn(priv->netdev, "Failed to parse tunnel attributes");
-			return err;
+		} else {
+			err = mlx5e_tc_set_attr_rx_tun(flow, tmp_spec);
 		}
-		err = mlx5e_tc_set_attr_rx_tun(flow, tmp_spec);
+		if (mlx5_flow_has_geneve_opt(tmp_spec))
+			mlx5_geneve_tlv_option_del(priv->mdev->geneve);
 		kvfree(tmp_spec);
 		if (err)
 			return err;
@@ -3692,6 +3693,7 @@ free_flow_post_acts(struct mlx5e_tc_flow *flow)
 {
 	struct mlx5_core_dev *counter_dev = get_flow_counter_dev(flow);
 	struct mlx5e_post_act *post_act = get_post_action(flow->priv);
+	struct mlx5_esw_flow_attr *esw_attr;
 	struct mlx5_flow_attr *attr, *tmp;
 	bool vf_tun;
 
@@ -3711,6 +3713,16 @@ free_flow_post_acts(struct mlx5e_tc_flow *flow)
 			mlx5e_mod_hdr_dealloc(&attr->parse_attr->mod_hdr_acts);
 			if (attr->modify_hdr)
 				mlx5_modify_header_dealloc(flow->priv->mdev, attr->modify_hdr);
+		}
+
+		if (mlx5e_is_eswitch_flow(flow)) {
+			esw_attr = attr->esw_attr;
+			if (esw_attr->int_port)
+				mlx5e_tc_int_port_put(mlx5e_get_int_port_priv(flow->priv),
+						      esw_attr->int_port);
+			if (esw_attr->dest_int_port)
+				mlx5e_tc_int_port_put(mlx5e_get_int_port_priv(flow->priv),
+						      esw_attr->dest_int_port);
 		}
 
 		list_del(&attr->list);
@@ -4378,6 +4390,7 @@ static int mlx5e_tc_add_fdb_peer_flow(struct flow_cls_offload *f,
 	else
 		in_mdev = priv->mdev;
 
+	flow_flags |= BIT(MLX5E_TC_FLOW_FLAG_PEER);
 	parse_attr = flow->attr->parse_attr;
 	peer_flow = __mlx5e_add_fdb_flow(peer_priv, f, flow_flags,
 					 parse_attr->filter_dev,

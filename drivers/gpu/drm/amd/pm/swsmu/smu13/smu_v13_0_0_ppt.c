@@ -1255,7 +1255,10 @@ static int smu_v13_0_0_get_thermal_temperature_range(struct smu_context *smu,
 	return 0;
 }
 
+#ifndef MAX
 #define MAX(a, b)	((a) > (b) ? (a) : (b))
+#endif
+
 static ssize_t smu_v13_0_0_get_gpu_metrics(struct smu_context *smu,
 					   void **table)
 {
@@ -1891,8 +1894,13 @@ static int smu_v13_0_0_mode1_reset(struct smu_context *smu)
 	else
 		ret = smu_cmn_send_smc_msg(smu, SMU_MSG_Mode1Reset, NULL);
 
-	if (!ret)
+	if (!ret) {
+		/* disable mmio access while doing mode 1 reset*/
+		smu->adev->no_hw_access = true;
+		/* ensure no_hw_access is globally visible before any MMIO */
+		smp_mb();
 		msleep(SMU13_MODE1_RESET_WAIT_TIME_IN_MS);
+	}
 
 	return ret;
 }

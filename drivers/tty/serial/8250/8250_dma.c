@@ -185,6 +185,23 @@ err:
 	return ret;
 }
 
+void serial8250_tx_dma_flush(struct uart_8250_port *p)
+{
+	struct uart_8250_dma *dma = p->dma;
+
+	if (!dma->tx_running)
+		return;
+
+	/* The serial core has reset the FIFO; completion must not advance it. */
+	dma->tx_size = 0;
+
+	/* uart_flush_buffer holds the port spinlock, so termination cannot sleep. */
+	dmaengine_terminate_async(dma->txchan);
+
+	/* The callback may not run after termination. */
+	dma->tx_running = 0;
+}
+
 #if defined(CONFIG_ARCH_ROCKCHIP) && defined(CONFIG_NO_GKI)
 
 int serial8250_rx_dma(struct uart_8250_port *p)
@@ -276,11 +293,12 @@ void serial8250_rx_dma_flush(struct uart_8250_port *p)
 {
 	struct uart_8250_dma *dma = p->dma;
 
-	if (dma->rx_running) {
-		dmaengine_pause(dma->rxchan);
-		__dma_rx_complete(p);
-		dmaengine_terminate_async(dma->rxchan);
-	}
+	if (!dma || !dma->rxchan || !dma->rx_running)
+		return;
+
+	dmaengine_pause(dma->rxchan);
+	__dma_rx_complete(p);
+	dmaengine_terminate_async(dma->rxchan);
 }
 EXPORT_SYMBOL_GPL(serial8250_rx_dma_flush);
 
@@ -396,6 +414,7 @@ void serial8250_release_dma(struct uart_8250_port *p)
 
 	/* Release RX resources */
 	dmaengine_terminate_sync(dma->rxchan);
+	dma->rx_running = 0;
 	dma_free_coherent(dma->rxchan->device->dev, dma->rx_size, dma->rx_buf,
 			  dma->rx_addr);
 	dma_release_channel(dma->rxchan);

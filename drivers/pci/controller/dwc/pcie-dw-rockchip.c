@@ -11,6 +11,7 @@
 #include <dt-bindings/phy/phy.h>
 #include <linux/clk.h>
 #include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/iopoll.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/of_address.h>

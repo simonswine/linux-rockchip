@@ -218,11 +218,6 @@ static int rockchip_gpio_set_direction(struct gpio_chip *chip,
 	unsigned long flags;
 	u32 data = input ? 0 : 1;
 
-	if (input)
-		pinctrl_gpio_direction_input(bank->pin_base + offset);
-	else
-		pinctrl_gpio_direction_output(bank->pin_base + offset);
-
 	raw_spin_lock_irqsave(&bank->slock, flags);
 	rockchip_gpio_writel_bit(bank, offset, data, bank->gpio_regs->port_ddr);
 	raw_spin_unlock_irqrestore(&bank->slock, flags);
@@ -677,6 +672,7 @@ static int rockchip_gpiolib_register(struct rockchip_pin_bank *bank)
 	gc->ngpio = bank->nr_pins;
 	gc->label = bank->name;
 	gc->parent = bank->dev;
+	gc->can_sleep = true;
 
 	if (!gc->base)
 		gc->base = GPIO_MAX_PINS * bank->bank_num;
@@ -974,8 +970,14 @@ static int rockchip_gpio_probe(struct platform_device *pdev)
 		}
 	}
 
-	clk_prepare_enable(bank->clk);
-	clk_prepare_enable(bank->db_clk);
+	ret = clk_prepare_enable(bank->clk);
+	if (ret)
+		return ret;
+	ret = clk_prepare_enable(bank->db_clk);
+	if (ret) {
+		clk_disable_unprepare(bank->clk);
+		return ret;
+	}
 
 	/*
 	 * Prevent clashes with a deferred output setting

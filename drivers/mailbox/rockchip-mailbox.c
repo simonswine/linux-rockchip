@@ -8,8 +8,8 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/mailbox_controller.h>
+#include <linux/of.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <soc/rockchip/rockchip-mailbox.h>
@@ -447,19 +447,10 @@ static int rockchip_mbox_probe(struct platform_device *pdev)
 	if (IS_ERR(mb->mbox_base))
 		return PTR_ERR(mb->mbox_base);
 
-	mb->pclk = devm_clk_get(&pdev->dev, "pclk_mailbox");
-	if (IS_ERR(mb->pclk)) {
-		ret = PTR_ERR(mb->pclk);
-		dev_err(&pdev->dev, "failed to get pclk_mailbox clock: %d\n",
-			ret);
-		return ret;
-	}
-
-	ret = clk_prepare_enable(mb->pclk);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to enable pclk: %d\n", ret);
-		return ret;
-	}
+	mb->pclk = devm_clk_get_enabled(&pdev->dev, "pclk_mailbox");
+	if (IS_ERR(mb->pclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(mb->pclk),
+				     "failed to get and enable pclk_mailbox clock\n");
 
 	for (i = 0; i < mb->mbox.num_chans; i++) {
 		irq = platform_get_irq(pdev, i);
@@ -506,7 +497,6 @@ static int rockchip_mbox_probe(struct platform_device *pdev)
 	return 0;
 
 disable_clk:
-	clk_disable_unprepare(mb->pclk);
 	return ret;
 }
 

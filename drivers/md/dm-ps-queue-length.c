@@ -122,8 +122,8 @@ static int ql_add_path(struct path_selector *ps, struct dm_path *path,
 
 	/*
 	 * Arguments: [<repeat_count>]
-	 * 	<repeat_count>: The number of I/Os before switching path.
-	 * 			If not given, default (QL_MIN_IO) is used.
+	 *	<repeat_count>: The number of I/Os before switching path.
+	 *			If not given, default (QL_MIN_IO) is used.
 	 */
 	if (argc > 1) {
 		*error = "queue-length ps: incorrect number of arguments";
@@ -259,8 +259,10 @@ static int __init dm_ql_init(void)
 {
 	int r = dm_register_path_selector(&ql_ps);
 
-	if (r < 0)
+	if (r < 0) {
 		DMERR("register failed %d", r);
+		return r;
+	}
 
 	DMINFO("version " QL_VERSION " loaded");
 

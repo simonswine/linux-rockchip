@@ -2030,6 +2030,19 @@ static int rockchip_i2s_tdm_hw_params(struct snd_pcm_substream *substream,
 		rockchip_i2s_tdm_calibrate_mclk(i2s_tdm, substream,
 						params_rate(params));
 
+	/* A machine driver may omit set_sysclk() for a stream. */
+	if (i2s_tdm->clk_trcm) {
+		if (!i2s_tdm->mclk_tx_freq && !i2s_tdm->mclk_rx_freq) {
+			i2s_tdm->mclk_tx_freq = DEFAULT_MCLK_FS * params_rate(params);
+			i2s_tdm->mclk_rx_freq = i2s_tdm->mclk_tx_freq;
+		}
+	} else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		if (!i2s_tdm->mclk_tx_freq)
+			i2s_tdm->mclk_tx_freq = DEFAULT_MCLK_FS * params_rate(params);
+	} else if (!i2s_tdm->mclk_rx_freq) {
+		i2s_tdm->mclk_rx_freq = DEFAULT_MCLK_FS * params_rate(params);
+	}
+
 	ret = rockchip_i2s_tdm_set_mclk(i2s_tdm, substream, &mclk);
 	if (ret)
 		return ret;

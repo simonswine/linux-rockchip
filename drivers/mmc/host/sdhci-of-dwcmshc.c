@@ -66,7 +66,7 @@
 #define DLL_TXCLK_TAPNUM_DEFAULT	0x10
 #define DLL_TXCLK_TAPNUM_90_DEGREES	0xA
 #define DLL_TXCLK_TAPNUM_FROM_SW	BIT(24)
-#define DLL_STRBIN_TAPNUM_DEFAULT	0x8
+#define DLL_STRBIN_TAPNUM_DEFAULT	0x4
 #define DLL_STRBIN_TAPNUM_FROM_SW	BIT(24)
 #define DLL_STRBIN_DELAY_NUM_SEL	BIT(26)
 #define DLL_STRBIN_DELAY_NUM_OFFSET	16
@@ -427,15 +427,20 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 	extra &= ~BIT(0);
 	sdhci_writel(host, extra, reg);
 
-	/* Disable output clock while config DLL */
+	/* Disable clock while config DLL */
 	sdhci_writew(host, 0, SDHCI_CLOCK_CONTROL);
 
 	if (clock <= 52000000) {
-		/* Disable DLL */
-		sdhci_writel(host, 0, DWCMSHC_EMMC_DLL_CTRL);
+		if (host->mmc->ios.timing == MMC_TIMING_MMC_HS200 ||
+		    host->mmc->ios.timing == MMC_TIMING_MMC_HS400) {
+			dev_err(mmc_dev(host->mmc),
+				"Can't reduce the clock below 52MHz in HS200/HS400 mode");
+			goto enable_clk;
+		}
+
 		/*
-		 * Config DLL BYPASS and Reset both of sample and drive clock.
-		 * The bypass bit and start bit need to set if DLL is not locked.
+		 * Disable DLL and reset both of sample and drive clock.
+		 * The bypass bit and start bit need to be set if DLL is not locked.
 		 */
 		sdhci_writel(host, DWCMSHC_EMMC_DLL_BYPASS | DWCMSHC_EMMC_DLL_START, DWCMSHC_EMMC_DLL_CTRL);
 		sdhci_writel(host, DLL_RXCLK_ORI_GATE, DWCMSHC_EMMC_DLL_RXCLK);
@@ -450,7 +455,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 			DLL_STRBIN_DELAY_NUM_SEL |
 			drv_data->ddr50_strbin_delay_num << DLL_STRBIN_DELAY_NUM_OFFSET;
 		sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
-		goto exit;
+		goto enable_clk;
 	}
 
 	/* Reset DLL */
@@ -470,7 +475,7 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 				 500 * USEC_PER_MSEC);
 	if (err) {
 		dev_err(mmc_dev(host->mmc), "DLL lock timeout!\n");
-		goto exit;
+		goto enable_clk;
 	}
 
 	dll_lock_value = ((sdhci_readl(host, DWCMSHC_EMMC_DLL_STATUS0) & 0xFF) * 2) & 0xFF;
@@ -517,8 +522,14 @@ static void dwcmshc_rk3568_set_clock(struct sdhci_host *host, unsigned int clock
 		extra |= DLL_TAP_VALUE_SEL | dll_lock_value << DLL_TAP_VALUE_OFFSET;
 	sdhci_writel(host, extra, DWCMSHC_EMMC_DLL_STRBIN);
 
-exit:
-	/* enable output clock */
+enable_clk:
+	/*
+	 * The sdclk frequency select bits in SDHCI_CLOCK_CONTROL are not functional
+	 * on Rockchip's SDHCI implementation. Instead, the clock frequency is fully
+	 * controlled via external clk provider by calling clk_set_rate(). Consequently,
+	 * passing 0 to sdhci_enable_clk() only re-enables the already-configured clock,
+	 * which matches the hardware's actual behavior.
+	 */
 	sdhci_enable_clk(host, 0);
 }
 

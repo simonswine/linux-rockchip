@@ -462,8 +462,8 @@ static bool shmem_confirm_swap(struct address_space *mapping,
 
 static int shmem_huge __read_mostly = SHMEM_HUGE_NEVER;
 
-bool shmem_is_huge(struct vm_area_struct *vma, struct inode *inode,
-		   pgoff_t index, bool shmem_huge_force)
+static bool __shmem_is_huge(struct vm_area_struct *vma, struct inode *inode,
+			    pgoff_t index, bool shmem_huge_force)
 {
 	loff_t i_size;
 
@@ -493,6 +493,15 @@ bool shmem_is_huge(struct vm_area_struct *vma, struct inode *inode,
 	default:
 		return false;
 	}
+}
+
+bool shmem_is_huge(struct vm_area_struct *vma, struct inode *inode,
+		   pgoff_t index, bool shmem_huge_force)
+{
+	if (HPAGE_PMD_ORDER > MAX_PAGECACHE_ORDER)
+		return false;
+
+	return __shmem_is_huge(vma, inode, index, shmem_huge_force);
 }
 
 #if defined(CONFIG_SYSFS)
@@ -2302,12 +2311,9 @@ static int shmem_mmap(struct file *file, struct vm_area_struct *vma)
 	struct shmem_inode_info *info = SHMEM_I(file_inode(file));
 	int ret;
 
-	ret = seal_check_future_write(info->seals, vma);
+	ret = seal_check_write(info->seals, vma);
 	if (ret)
 		return ret;
-
-	/* arm64 - allow memory tagging on RAM-based files */
-	vma->vm_flags |= VM_MTE_ALLOWED;
 
 	file_accessed(file);
 	vma->vm_ops = &shmem_vm_ops;

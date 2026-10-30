@@ -2607,6 +2607,7 @@ static int rk_gmac_csu_init(struct plat_stmmacenet_data *plat)
 static int gmac_clk_enable(struct rk_priv_data *bsp_priv, bool enable)
 {
 	int phy_iface = bsp_priv->phy_iface;
+	int ret;
 
 	if (enable) {
 		if (!bsp_priv->clk_enabled) {
@@ -2624,8 +2625,20 @@ static int gmac_clk_enable(struct rk_priv_data *bsp_priv, bool enable)
 						bsp_priv->clk_mac_refout);
 			}
 
-			if (!IS_ERR(bsp_priv->clk_phy))
-				clk_prepare_enable(bsp_priv->clk_phy);
+			if (!IS_ERR(bsp_priv->clk_phy)) {
+				ret = clk_prepare_enable(bsp_priv->clk_phy);
+				if (ret) {
+					if (phy_iface == PHY_INTERFACE_MODE_RMII) {
+						if (!IS_ERR(bsp_priv->clk_mac_refout))
+							clk_disable_unprepare(bsp_priv->clk_mac_refout);
+						if (!IS_ERR(bsp_priv->clk_mac_ref))
+							clk_disable_unprepare(bsp_priv->clk_mac_ref);
+						if (!IS_ERR(bsp_priv->mac_clk_rx))
+							clk_disable_unprepare(bsp_priv->mac_clk_rx);
+					}
+					return ret;
+				}
+			}
 
 			if (!IS_ERR(bsp_priv->aclk_mac))
 				clk_prepare_enable(bsp_priv->aclk_mac);

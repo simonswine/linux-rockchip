@@ -500,7 +500,7 @@ int lima_sched_pipe_init(struct lima_sched_pipe *pipe, const char *name)
 		.name = name,
 		.dev = pipe->ldev->dev,
 	};
- 
+
 	pipe->fence_context = dma_fence_context_alloc(1);
 	spin_lock_init(&pipe->fence_lock);
 

@@ -19,6 +19,8 @@ enum io_uring_cmd_flags {
 
 	/* the request is executed from poll, it should not be freed */
 	IO_URING_F_MULTISHOT		= 32,
+	/* executed by io-wq */
+	IO_URING_F_IOWQ			= 64,
 };
 
 struct io_uring_cmd {
@@ -50,10 +52,8 @@ bool io_is_uring_fops(struct file *file);
 
 static inline void io_uring_files_cancel(void)
 {
-	if (current->io_uring) {
-		io_uring_unreg_ringfd();
+	if (current->io_uring)
 		__io_uring_cancel(false);
-	}
 }
 static inline void io_uring_task_cancel(void)
 {

@@ -37,6 +37,14 @@ struct array_block {
  */
 #define CSUM_XOR 595846735
 
+/*
+ * Each array block can hold this many values.
+ */
+static uint32_t calc_max_entries(size_t value_size, size_t size_of_block)
+{
+	return (size_of_block - sizeof(struct array_block)) / value_size;
+}
+
 static void array_block_prepare_for_write(struct dm_block_validator *v,
 					  struct dm_block *b,
 					  size_t size_of_block)
@@ -54,6 +62,7 @@ static int array_block_check(struct dm_block_validator *v,
 			     size_t size_of_block)
 {
 	struct array_block *bh_le = dm_block_data(b);
+	uint32_t nr_entries, max_entries, value_size;
 	__le32 csum_disk;
 
 	if (dm_block_location(b) != le64_to_cpu(bh_le->blocknr)) {
@@ -70,6 +79,26 @@ static int array_block_check(struct dm_block_validator *v,
 		DMERR_LIMIT("array_block_check failed: csum %u != wanted %u",
 			    (unsigned int) le32_to_cpu(csum_disk),
 			    (unsigned int) le32_to_cpu(bh_le->csum));
+		return -EILSEQ;
+	}
+
+	nr_entries = le32_to_cpu(bh_le->nr_entries);
+	max_entries = le32_to_cpu(bh_le->max_entries);
+	value_size = le32_to_cpu(bh_le->value_size);
+
+	if (!value_size) {
+		DMERR_LIMIT("%s failed: value_size is zero", __func__);
+		return -EILSEQ;
+	}
+
+	if (max_entries != calc_max_entries(value_size, size_of_block)) {
+		DMERR_LIMIT("%s failed: max_entries %u invalid for value_size %u",
+			    __func__, max_entries, value_size);
+		return -EILSEQ;
+	}
+
+	if (nr_entries > max_entries) {
+		DMERR_LIMIT("%s failed: too many entries", __func__);
 		return -EILSEQ;
 	}
 
@@ -111,6 +140,7 @@ static void on_entries(struct dm_array_info *info, struct array_block *ab,
 		       void (*fn)(void *, const void *, unsigned int))
 {
 	unsigned int nr_entries = le32_to_cpu(ab->nr_entries);
+
 	fn(info->value_type.context, element_at(info, ab, 0), nr_entries);
 }
 
@@ -134,14 +164,6 @@ static void dec_ablock_entries(struct dm_array_info *info, struct array_block *a
 
 	if (vt->dec)
 		on_entries(info, ab, vt->dec);
-}
-
-/*
- * Each array block can hold this many values.
- */
-static uint32_t calc_max_entries(size_t value_size, size_t size_of_block)
-{
-	return (size_of_block - sizeof(struct array_block)) / value_size;
 }
 
 /*
@@ -223,6 +245,14 @@ static int get_ablock(struct dm_array_info *info, dm_block_t b,
 		return r;
 
 	*ab = dm_block_data(*block);
+	if (le32_to_cpu((*ab)->value_size) != info->value_type.size) {
+		DMERR_LIMIT("%s failed: value_size %u != wanted %u", __func__,
+			    le32_to_cpu((*ab)->value_size),
+			    info->value_type.size);
+		dm_tm_unlock(info->btree_info.tm, *block);
+		return -EILSEQ;
+	}
+
 	return 0;
 }
 
@@ -285,6 +315,14 @@ static int __shadow_ablock(struct dm_array_info *info, dm_block_t b,
 		return r;
 
 	*ab = dm_block_data(*block);
+	if (le32_to_cpu((*ab)->value_size) != info->value_type.size) {
+		DMERR_LIMIT("%s failed: value_size %u != wanted %u", __func__,
+			    le32_to_cpu((*ab)->value_size),
+			    info->value_type.size);
+		dm_tm_unlock(info->btree_info.tm, *block);
+		return -EILSEQ;
+	}
+
 	if (inc)
 		inc_ablock_entries(info, *ab);
 
@@ -437,6 +475,7 @@ static int drop_blocks(struct resize *resize, unsigned int begin_index,
 
 	while (begin_index != end_index) {
 		uint64_t key = begin_index++;
+
 		r = dm_btree_remove(&resize->info->btree_info, resize->root,
 				    &key, &resize->root);
 		if (r)
@@ -621,6 +660,7 @@ static void __block_dec(void *context, const void *value)
 static void block_dec(void *context, const void *value, unsigned int count)
 {
 	unsigned int i;
+
 	for (i = 0; i < count; i++, value += sizeof(__le64))
 		__block_dec(context, value);
 }
@@ -694,6 +734,7 @@ int dm_array_resize(struct dm_array_info *info, dm_block_t root,
 		    __dm_written_to_disk(value)
 {
 	int r = array_resize(info, root, old_size, new_size, value, new_root);
+
 	__dm_unbless_for_disk(value);
 	return r;
 }
@@ -912,23 +953,27 @@ static int load_ablock(struct dm_array_cursor *c)
 	if (c->block)
 		unlock_ablock(c->info, c->block);
 
-	c->block = NULL;
-	c->ab = NULL;
 	c->index = 0;
 
 	r = dm_btree_cursor_get_value(&c->cursor, &key, &value_le);
 	if (r) {
 		DMERR("dm_btree_cursor_get_value failed");
-		dm_btree_cursor_end(&c->cursor);
+		goto out;
 
 	} else {
 		r = get_ablock(c->info, le64_to_cpu(value_le), &c->block, &c->ab);
 		if (r) {
 			DMERR("get_ablock failed");
-			dm_btree_cursor_end(&c->cursor);
+			goto out;
 		}
 	}
 
+	return 0;
+
+out:
+	dm_btree_cursor_end(&c->cursor);
+	c->block = NULL;
+	c->ab = NULL;
 	return r;
 }
 
@@ -951,10 +996,10 @@ EXPORT_SYMBOL_GPL(dm_array_cursor_begin);
 
 void dm_array_cursor_end(struct dm_array_cursor *c)
 {
-	if (c->block) {
+	if (c->block)
 		unlock_ablock(c->info, c->block);
-		dm_btree_cursor_end(&c->cursor);
-	}
+
+	dm_btree_cursor_end(&c->cursor);
 }
 EXPORT_SYMBOL_GPL(dm_array_cursor_end);
 
@@ -994,6 +1039,7 @@ int dm_array_cursor_skip(struct dm_array_cursor *c, uint32_t count)
 		}
 
 		count -= remaining;
+		c->index += (remaining - 1);
 		r = dm_array_cursor_next(c);
 
 	} while (!r);

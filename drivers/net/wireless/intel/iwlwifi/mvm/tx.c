@@ -1105,14 +1105,14 @@ static int iwl_mvm_tx_mpdu(struct iwl_mvm *mvm, struct sk_buff *skb,
 	bool is_ampdu = false;
 	int hdrlen;
 
+	if (WARN_ON_ONCE(!sta))
+		return -1;
+
 	mvmsta = iwl_mvm_sta_from_mac80211(sta);
 	fc = hdr->frame_control;
 	hdrlen = ieee80211_hdrlen(fc);
 
 	if (IWL_MVM_NON_TRANSMITTING_AP && ieee80211_is_probe_resp(fc))
-		return -1;
-
-	if (WARN_ON_ONCE(!mvmsta))
 		return -1;
 
 	if (WARN_ON_ONCE(mvmsta->sta_id == IWL_MVM_INVALID_STA))
@@ -1242,15 +1242,17 @@ drop:
 int iwl_mvm_tx_skb_sta(struct iwl_mvm *mvm, struct sk_buff *skb,
 		       struct ieee80211_sta *sta)
 {
-	struct iwl_mvm_sta *mvmsta = iwl_mvm_sta_from_mac80211(sta);
+	struct iwl_mvm_sta *mvmsta;
 	struct ieee80211_tx_info info;
 	struct sk_buff_head mpdus_skbs;
 	unsigned int payload_len;
 	int ret;
 	struct sk_buff *orig_skb = skb;
 
-	if (WARN_ON_ONCE(!mvmsta))
+	if (WARN_ON_ONCE(!sta))
 		return -1;
+
+	mvmsta = iwl_mvm_sta_from_mac80211(sta);
 
 	if (WARN_ON_ONCE(mvmsta->sta_id == IWL_MVM_INVALID_STA))
 		return -1;
@@ -1546,6 +1548,17 @@ static inline u32 iwl_mvm_get_scd_ssn(struct iwl_mvm *mvm,
 {
 	return le32_to_cpup((__le32 *)iwl_mvm_get_agg_status(mvm, tx_resp) +
 			    tx_resp->frame_count) & 0xfff;
+}
+
+static inline size_t iwl_mvm_tx_resp_min_len(struct iwl_mvm *mvm,
+					     struct iwl_mvm_tx_resp *tx_resp)
+{
+	struct agg_tx_status *agg_status =
+		iwl_mvm_get_agg_status(mvm, tx_resp);
+
+	/* The aggregate response ends with a trailing SCD SSN __le32 word. */
+	return (u8 *)(agg_status + tx_resp->frame_count) - (u8 *)tx_resp +
+		sizeof(__le32);
 }
 
 static void iwl_mvm_rx_tx_cmd_single(struct iwl_mvm *mvm,
@@ -1852,6 +1865,9 @@ static void iwl_mvm_rx_tx_cmd_agg(struct iwl_mvm *mvm,
 	int queue = SEQ_TO_QUEUE(sequence);
 	struct ieee80211_sta *sta;
 
+	if (WARN_ON_ONCE(iwl_mvm_has_new_tx_api(mvm)))
+		return;
+
 	if (WARN_ON_ONCE(queue < IWL_MVM_DQA_MIN_DATA_QUEUE &&
 			 (queue != IWL_MVM_DQA_BSS_CLIENT_QUEUE)))
 		return;
@@ -1886,6 +1902,27 @@ void iwl_mvm_rx_tx_cmd(struct iwl_mvm *mvm, struct iwl_rx_cmd_buffer *rxb)
 {
 	struct iwl_rx_packet *pkt = rxb_addr(rxb);
 	struct iwl_mvm_tx_resp *tx_resp = (void *)pkt->data;
+	size_t min_len;
+
+	if (!tx_resp->frame_count) {
+		IWL_WARN(mvm, "invalid TX_CMD frame_count %u\n",
+			 tx_resp->frame_count);
+		return;
+	}
+
+	if (iwl_mvm_has_new_tx_api(mvm) && tx_resp->frame_count != 1) {
+		IWL_WARN(mvm, "invalid TX_CMD frame_count %u for new TX API\n",
+			 tx_resp->frame_count);
+		return;
+	}
+
+	min_len = iwl_mvm_tx_resp_min_len(mvm, tx_resp);
+	if (iwl_rx_packet_payload_len(pkt) < min_len) {
+		IWL_WARN(mvm, "invalid TX_CMD len %u (frame_count %u, min %zu)\n",
+			 iwl_rx_packet_payload_len(pkt), tx_resp->frame_count,
+			 min_len);
+		return;
+	}
 
 	if (tx_resp->frame_count == 1)
 		iwl_mvm_rx_tx_cmd_single(mvm, pkt);
@@ -2092,8 +2129,14 @@ void iwl_mvm_rx_ba_notif(struct iwl_mvm *mvm, struct iwl_rx_cmd_buffer *rxb)
 			if (tid == IWL_MGMT_TID)
 				tid = IWL_MAX_TID_COUNT;
 
+			if (tid >= ARRAY_SIZE(mvmsta->tid_data)) {
+				IWL_WARN(mvm, "invalid TID %d in compressed BA\n",
+					 tid);
+				continue;
+			}
+
 			if (mvmsta)
-				mvmsta->tid_data[i].lq_color = lq_color;
+				mvmsta->tid_data[tid].lq_color = lq_color;
 
 			iwl_mvm_tx_reclaim(mvm, sta_id, tid,
 					   (int)(le16_to_cpu(ba_tfd->q_num)),
@@ -2118,6 +2161,10 @@ void iwl_mvm_rx_ba_notif(struct iwl_mvm *mvm, struct iwl_rx_cmd_buffer *rxb)
 	ba_notif = (void *)pkt->data;
 	sta_id = ba_notif->sta_id;
 	tid = ba_notif->tid;
+	if (tid >= IWL_MAX_TID_COUNT) {
+		IWL_WARN(mvm, "invalid TID %d in BA notif\n", tid);
+		return;
+	}
 	/* "flow" corresponds to Tx queue */
 	txq = le16_to_cpu(ba_notif->scd_flow);
 	/* "ssn" is start of block-ack Tx window, corresponds to index

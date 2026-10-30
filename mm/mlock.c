@@ -141,7 +141,7 @@ static struct lruvec *__munlock_page(struct page *page, struct lruvec *lruvec)
 
 munlock:
 	if (TestClearPageMlocked(page)) {
-		__mod_zone_page_state(page_zone(page), NR_MLOCK, -nr_pages);
+		mod_zone_page_state(page_zone(page), NR_MLOCK, -nr_pages);
 		if (isolated || !PageUnevictable(page))
 			__count_vm_events(UNEVICTABLE_PGMUNLOCKED, nr_pages);
 		else
@@ -256,7 +256,7 @@ void mlock_folio(struct folio *folio)
 
 	folio_get(folio);
 	if (!pagevec_add(pvec, mlock_lru(&folio->page)) ||
-	    folio_test_large(folio) || lru_cache_disabled())
+	    !folio_may_be_lru_cached(folio) || lru_cache_disabled())
 		mlock_pagevec(pvec);
 	local_unlock(&mlock_pvec.lock);
 }

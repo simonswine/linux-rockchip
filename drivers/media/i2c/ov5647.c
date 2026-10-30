@@ -1436,6 +1436,7 @@ static int ov5647_init_controls(struct ov5647 *sensor, struct device *dev)
 	//struct v4l2_fwnode_device_properties props;
 
 	v4l2_ctrl_handler_init(&sensor->ctrls, 8);
+	sensor->ctrls.lock = &sensor->lock;
 
 	sensor->link_freq = v4l2_ctrl_new_int_menu(&sensor->ctrls, NULL, V4L2_CID_LINK_FREQ,
 				      ARRAY_SIZE(link_freq_menu_items) - 1, 0, link_freq_menu_items);
@@ -1598,12 +1599,12 @@ static int ov5647_probe(struct i2c_client *client,
 
 	sensor->mode = OV5647_DEFAULT_MODE;
 
+	sd = &sensor->sd;
+	v4l2_i2c_subdev_init(sd, client, &ov5647_subdev_ops);
+
 	ret = ov5647_init_controls(sensor, dev);
 	if (ret)
 		goto mutex_destroy;
-
-	sd = &sensor->sd;
-	v4l2_i2c_subdev_init(sd, client, &ov5647_subdev_ops);
 	sd->internal_ops = &ov5647_subdev_internal_ops;
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
 

@@ -221,40 +221,52 @@ static inline void pebs_set_tlb_lock(u64 *val, bool tlb, bool lock)
 }
 
 /* Retrieve the latency data for e-core of ADL */
-u64 adl_latency_data_small(struct perf_event *event, u64 status)
+static u64 __grt_latency_data(struct perf_event *event, u64 status,
+			       u8 dse, bool tlb, bool lock, bool blk)
 {
-	union intel_x86_pebs_dse dse;
+	union perf_mem_data_src src;
 	u64 val;
 
-	WARN_ON_ONCE(hybrid_pmu(event->pmu)->cpu_type == hybrid_big);
+	WARN_ON_ONCE(is_hybrid() &&
+		     hybrid_pmu(event->pmu)->cpu_type == hybrid_big);
 
-	dse.val = status;
+	val = hybrid_var(event->pmu, pebs_data_source)[dse];
 
-	val = hybrid_var(event->pmu, pebs_data_source)[dse.ld_dse];
+	pebs_set_tlb_lock(&val, tlb, lock);
 
-	/*
-	 * For the atom core on ADL,
-	 * bit 4: lock, bit 5: TLB access.
-	 */
-	pebs_set_tlb_lock(&val, dse.ld_locked, dse.ld_stlb_miss);
-
-	if (dse.ld_data_blk)
+	if (blk)
 		val |= P(BLK, DATA);
 	else
 		val |= P(BLK, NA);
 
-	return val;
+	src.val = val;
+
+	if (event->hw.flags &
+	    (PERF_X86_EVENT_PEBS_LDLAT | PERF_X86_EVENT_PEBS_LD_HSW))
+		src.mem_op = P(OP, LOAD);
+	if (event->hw.flags &
+	    (PERF_X86_EVENT_PEBS_STLAT | PERF_X86_EVENT_PEBS_ST_HSW))
+		src.mem_op = P(OP, STORE);
+
+	return src.val;
 }
 
-static u64 load_latency_data(struct perf_event *event, u64 status)
+u64 grt_latency_data(struct perf_event *event, u64 status)
 {
 	union intel_x86_pebs_dse dse;
 	u64 val;
 
 	dse.val = status;
 
+	/* Gracemont uses bit 4 for lock and bit 5 for TLB access. */
+	if (event->hw.flags & PERF_X86_EVENT_PEBS_LAT_HYBRID)
+		return __grt_latency_data(event, status, dse.ld_dse,
+					  dse.ld_locked, dse.ld_stlb_miss,
+					  dse.ld_data_blk);
+
 	/*
-	 * use the mapping table for bit 0-3
+	 * For non-Gracemont load-latency events, use the mapping table
+	 * for bit 0-3 and retain the legacy TLB, lock and block decoding.
 	 */
 	val = hybrid_var(event->pmu, pebs_data_source)[dse.ld_dse];
 
@@ -789,11 +801,11 @@ unlock:
 	return 1;
 }
 
-static inline void intel_pmu_drain_pebs_buffer(void)
+void intel_pmu_drain_pebs_buffer(void)
 {
 	struct perf_sample_data data;
 
-	x86_pmu.drain_pebs(NULL, &data);
+	static_call(x86_pmu_drain_pebs)(NULL, &data);
 }
 
 /*
@@ -837,8 +849,8 @@ struct event_constraint intel_glm_pebs_event_constraints[] = {
 
 struct event_constraint intel_grt_pebs_event_constraints[] = {
 	/* Allow all events as PEBS with no flags */
-	INTEL_HYBRID_LAT_CONSTRAINT(0x5d0, 0x3),
-	INTEL_HYBRID_LAT_CONSTRAINT(0x6d0, 0xf),
+	INTEL_HYBRID_LDLAT_CONSTRAINT(0x5d0, 0x3),
+	INTEL_HYBRID_STLAT_CONSTRAINT(0x6d0, 0x3f),
 	EVENT_CONSTRAINT_END
 };
 
@@ -1149,8 +1161,10 @@ static u64 pebs_update_adaptive_cfg(struct perf_event *event)
 	 * + precise_ip < 2 for the non event IP
 	 * + For RTM TSX weight we need GPRs for the abort code.
 	 */
-	gprs = (sample_type & PERF_SAMPLE_REGS_INTR) &&
-	       (attr->sample_regs_intr & PEBS_GP_REGS);
+	gprs = ((sample_type & PERF_SAMPLE_REGS_INTR) &&
+		(attr->sample_regs_intr & PEBS_GP_REGS)) ||
+	       ((sample_type & PERF_SAMPLE_REGS_USER) &&
+		(attr->sample_regs_user & PEBS_GP_REGS));
 
 	tsx_weight = (sample_type & PERF_SAMPLE_WEIGHT_TYPE) &&
 		     ((attr->config & INTEL_ARCH_EVENT_MASK) ==
@@ -1509,7 +1523,7 @@ static u64 get_data_src(struct perf_event *event, u64 aux)
 	bool fst = fl & (PERF_X86_EVENT_PEBS_ST | PERF_X86_EVENT_PEBS_HSW_PREC);
 
 	if (fl & PERF_X86_EVENT_PEBS_LDLAT)
-		val = load_latency_data(event, aux);
+		val = grt_latency_data(event, aux);
 	else if (fl & PERF_X86_EVENT_PEBS_STLAT)
 		val = store_latency_data(event, aux);
 	else if (fl & PERF_X86_EVENT_PEBS_LAT_HYBRID)
@@ -1792,7 +1806,7 @@ static void setup_pebs_adaptive_sample_data(struct perf_event *event,
 			regs->flags &= ~PERF_EFLAGS_EXACT;
 		}
 
-		if (sample_type & PERF_SAMPLE_REGS_INTR)
+		if (sample_type & (PERF_SAMPLE_REGS_INTR | PERF_SAMPLE_REGS_USER))
 			adaptive_pebs_save_regs(regs, gprs);
 	}
 
@@ -1900,15 +1914,6 @@ get_next_pebs_record_by_bit(void *base, void *top, int bit)
 		}
 	}
 	return NULL;
-}
-
-void intel_pmu_auto_reload_read(struct perf_event *event)
-{
-	WARN_ON(!(event->hw.flags & PERF_X86_EVENT_AUTO_RELOAD));
-
-	perf_pmu_disable(event->pmu);
-	intel_pmu_drain_pebs_buffer();
-	perf_pmu_enable(event->pmu);
 }
 
 /*

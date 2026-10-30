@@ -205,6 +205,8 @@ static int zynqmp_dpsub_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	dma_set_max_seg_size(&pdev->dev, DMA_BIT_MASK(32));
+
 	/* Try the reserved memory. Proceed if there's none. */
 	of_reserved_mem_device_init(&pdev->dev);
 
@@ -251,7 +253,7 @@ static int zynqmp_dpsub_remove(struct platform_device *pdev)
 	struct zynqmp_dpsub *dpsub = platform_get_drvdata(pdev);
 	struct drm_device *drm = &dpsub->drm;
 
-	drm_dev_unregister(drm);
+	drm_dev_unplug(drm);
 	drm_atomic_helper_shutdown(drm);
 	drm_kms_helper_poll_fini(drm);
 
